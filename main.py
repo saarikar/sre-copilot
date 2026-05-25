@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security.api_key import APIKeyHeader
+from fastapi import Security
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from groq import Groq
@@ -25,12 +27,16 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 Instrumentator().instrument(app).expose(app, include_in_schema=False)
 
+api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
+
 @app.get("/metrics-public")
-def metrics_public():
+def metrics_public(authorization: str = Security(api_key_header)):
+    token = os.getenv("METRICS_TOKEN")
+    if authorization != f"Bearer {token}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
     from fastapi.responses import Response
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
-
 # --- Fake user database ---
 USERS_DB = {
     "admin": {
