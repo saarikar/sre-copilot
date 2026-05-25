@@ -21,6 +21,8 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 app = FastAPI(title="SRE Copilot")
+from prometheus_fastapi_instrumentator import Instrumentator
+Instrumentator().instrument(app).expose(app)
 
 # --- Fake user database ---
 USERS_DB = {
