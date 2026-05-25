@@ -22,7 +22,14 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 app = FastAPI(title="SRE Copilot")
 from prometheus_fastapi_instrumentator import Instrumentator
-Instrumentator().instrument(app).expose(app)
+
+Instrumentator().instrument(app).expose(app, include_in_schema=False)
+
+@app.get("/metrics-public")
+def metrics_public():
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    from fastapi.responses import Response
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 # --- Fake user database ---
 USERS_DB = {
