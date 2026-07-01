@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.security.api_key import APIKeyHeader
 from fastapi import Security
@@ -14,6 +14,9 @@ import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 import psutil
 import socket
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 load_dotenv()
 
@@ -21,6 +24,7 @@ load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() != "false"
 
 # --- Setup ---
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -30,6 +34,11 @@ app = FastAPI(title="SRE Copilot")
 from prometheus_fastapi_instrumentator import Instrumentator
 
 Instrumentator().instrument(app).expose(app, include_in_schema=False)
+
+# --- Rate limiting (per client IP) ---
+limiter = Limiter(key_func=get_remote_address, enabled=RATE_LIMIT_ENABLED)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 
@@ -91,7 +100,8 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
 
 # --- Routes ---
 @app.post("/auth/login", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends()):
+@limiter.limit("5/minute")
+def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
     user = USERS_DB.get(form_data.username)
     if not user or not verify_password(form_data.password, user["password"]):
         raise HTTPException(status_code=401, detail="Wrong username or password")
@@ -114,8 +124,9 @@ def metrics():
     }
 
 @app.post("/api/analyze", dependencies=[Depends(get_current_user)])
-def analyze(request: LogRequest):
-    return _analyze_logs(request.logs, request.pod_name)
+@limiter.limit("20/minute")
+def analyze(request: Request, payload: LogRequest):
+    return _analyze_logs(payload.logs, payload.pod_name)
 
 
 def _analyze_logs(logs: str, pod_name: str):
@@ -176,7 +187,8 @@ def _fetch_cloudwatch_logs(log_group: str, log_stream: str, minutes: int) -> lis
 
 
 @app.get("/api/cloudwatch/groups", dependencies=[Depends(get_current_user)])
-def list_log_groups():
+@limiter.limit("20/minute")
+def list_log_groups(request: Request):
     cw = _get_cloudwatch_client()
     try:
         response = cw.describe_log_groups(limit=50)
@@ -187,21 +199,23 @@ def list_log_groups():
 
 
 @app.post("/api/cloudwatch/logs", dependencies=[Depends(get_current_user)])
-def get_cloudwatch_logs(request: CloudWatchLogsRequest):
-    messages = _fetch_cloudwatch_logs(request.log_group, request.log_stream, request.minutes)
+@limiter.limit("20/minute")
+def get_cloudwatch_logs(request: Request, payload: CloudWatchLogsRequest):
+    messages = _fetch_cloudwatch_logs(payload.log_group, payload.log_stream, payload.minutes)
     if not messages:
-        return {"log_group": request.log_group, "events": [], "message": "No log events found in the given time range"}
-    return {"log_group": request.log_group, "events": messages, "count": len(messages)}
+        return {"log_group": payload.log_group, "events": [], "message": "No log events found in the given time range"}
+    return {"log_group": payload.log_group, "events": messages, "count": len(messages)}
 
 
 @app.post("/api/cloudwatch/analyze", dependencies=[Depends(get_current_user)])
-def analyze_cloudwatch_logs(request: CloudWatchAnalyzeRequest):
-    messages = _fetch_cloudwatch_logs(request.log_group, request.log_stream, request.minutes)
+@limiter.limit("20/minute")
+def analyze_cloudwatch_logs(request: Request, payload: CloudWatchAnalyzeRequest):
+    messages = _fetch_cloudwatch_logs(payload.log_group, payload.log_stream, payload.minutes)
     if not messages:
         raise HTTPException(status_code=404, detail="No log events found in the given time range")
     logs_text = "\n".join(messages)
     return {
-        "log_group": request.log_group,
+        "log_group": payload.log_group,
         "events_analyzed": len(messages),
-        **_analyze_logs(logs_text, request.pod_name),
+        **_analyze_logs(logs_text, payload.pod_name),
     }

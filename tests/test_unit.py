@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from botocore.exceptions import ClientError, NoCredentialsError
 import json
+import main
 from main import app
 
 client = TestClient(app)
@@ -34,6 +35,17 @@ def test_login_wrong_password():
 def test_login_wrong_user():
     response = client.post("/auth/login", data={"username": "hacker", "password": "password123"})
     assert response.status_code == 401
+
+def test_login_rate_limit():
+    main.limiter.enabled = True
+    try:
+        for _ in range(5):
+            response = client.post("/auth/login", data={"username": "admin", "password": "wrong"})
+            assert response.status_code == 401
+        response = client.post("/auth/login", data={"username": "admin", "password": "wrong"})
+        assert response.status_code == 429
+    finally:
+        main.limiter.enabled = False
 
 
 # --- Metrics ---

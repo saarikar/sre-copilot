@@ -10,7 +10,8 @@ An AI-powered backend tool for Site Reliability Engineers. Pulls logs directly f
 - **Live System Metrics** — real CPU, memory, and hostname via psutil
 - **Prometheus Metrics** — auto-instrumented via `/metrics-public` for Grafana scraping
 - **Dockerized** — runs anywhere with a single command
-- **CI/CD** — GitHub Actions runs 18 unit tests and builds the Docker image on every push
+- **CI/CD** — GitHub Actions runs unit tests and builds the Docker image on every push; Render auto-deploys once those checks pass
+- **Rate Limiting** — per-IP limits on auth and the paid Groq/AWS-backed endpoints protect against brute force and cost abuse
 
 ## Architecture
 
@@ -195,6 +196,26 @@ docker build -t sre-copilot .
 docker run -p 8000:8000 --env-file .env sre-copilot
 ```
 
+## Rate Limits
+
+All limits are per client IP:
+
+| Endpoint | Limit | Why |
+|---|---|---|
+| `POST /auth/login` | 5/minute | Brute-force protection |
+| `POST /api/analyze` | 20/minute | Paid Groq call |
+| `POST /api/cloudwatch/analyze` | 20/minute | AWS + paid Groq call |
+| `POST /api/cloudwatch/logs` | 20/minute | AWS call |
+| `GET /api/cloudwatch/groups` | 20/minute | AWS call |
+
+Exceeding a limit returns `429 Too Many Requests`. `/health` and `/metrics-public` are exempt so uptime checks and Prometheus scraping are never throttled. Set `RATE_LIMIT_ENABLED=false` to disable limiting entirely (the test suite does this automatically).
+
+## Deployment (Render)
+
+The app is deployed on Render at `sre-copilot-v1wq.onrender.com`, connected directly to this GitHub repo with **Auto-Deploy: After CI Checks Pass**. That means Render waits for the `SRE Copilot CI/CD` GitHub Actions workflow (tests + Docker build) to succeed on `main` before rolling out a new deploy — a broken commit never goes live.
+
+`render.yaml` in this repo documents the service's configuration (Docker runtime, health check path, required env vars) but isn't used as an active Render Blueprint — the service was created by connecting the repo directly in the Render dashboard. Required env vars (`GROQ_API_KEY`, `SECRET_KEY`, `ADMIN_PASSWORD`, `METRICS_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `RATE_LIMIT_ENABLED`) are set directly in the service's **Environment** tab on Render.
+
 ## Running Tests
 
 ```bash
@@ -222,3 +243,4 @@ The CloudWatch endpoints require an IAM user with `CloudWatchLogsReadOnlyAccess`
 | `AWS_ACCESS_KEY_ID` | AWS IAM access key |
 | `AWS_SECRET_ACCESS_KEY` | AWS IAM secret key |
 | `AWS_REGION` | AWS region where your log groups live |
+| `RATE_LIMIT_ENABLED` | Set to `false` to disable rate limiting (defaults to `true`) |

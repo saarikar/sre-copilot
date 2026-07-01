@@ -11,3 +11,4 @@ httpx
 prometheus-fastapi-instrumentator
 boto3
 psutil
+slowapi
