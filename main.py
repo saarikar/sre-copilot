@@ -12,6 +12,8 @@ import os
 import json
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
+import psutil
+import socket
 
 load_dotenv()
 
@@ -73,7 +75,7 @@ def verify_password(plain, hashed):
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -102,11 +104,13 @@ def health():
 
 @app.get("/api/metrics", dependencies=[Depends(get_current_user)])
 def metrics():
+    mem = psutil.virtual_memory()
     return {
-        "cpu_percent": 42,
-        "memory_mb": 512,
-        "pod": "auth-service",
-        "restarts": 3
+        "cpu_percent": psutil.cpu_percent(interval=0.5),
+        "memory_mb": round(mem.used / (1024 * 1024)),
+        "memory_total_mb": round(mem.total / (1024 * 1024)),
+        "memory_percent": mem.percent,
+        "host": socket.gethostname(),
     }
 
 @app.post("/api/analyze", dependencies=[Depends(get_current_user)])
